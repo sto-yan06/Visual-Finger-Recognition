@@ -2,20 +2,20 @@ import cv2
 import mediapipe as mp
 from screeninfo import get_monitors
 import time
+import keyboard
 import tkinter as tk
 from tkinter import Scale, Label, Button
 from PIL import Image, ImageTk
 import ctypes
 
+# Initialize MediaPipe Hands
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands()
 
-# Determine the total workspace dimensions
 workspace_width = sum(m.width for m in get_monitors())
 workspace_height = max(m.height for m in get_monitors())
-
-# Dead-zone radius and default values
 dead_zone_radius = 20
+
 default_smoothing_factor = 20
 default_dead_zone_radius = 20
 default_delay = 10
@@ -23,9 +23,9 @@ default_delay = 10
 try:
     with open("settings.txt", "r") as file:
         lines = file.readlines()
-        default_smoothing_factor = int(lines[0].strip()) if lines and len(lines) > 0 else default_smoothing_factor
-        default_dead_zone_radius = int(lines[1].strip()) if lines and len(lines) > 1 else default_dead_zone_radius
-        default_delay = int(lines[2].strip()) if lines and len(lines) > 2 else default_delay
+        default_smoothing_factor = int(lines[0].strip())
+        default_dead_zone_radius = int(lines[1].strip())
+        default_delay = int(lines[2].strip())
 except FileNotFoundError:
     pass
 
@@ -69,6 +69,9 @@ def on_close():
     save_settings()
     cap.release()
     root.destroy()
+
+def change_workspace():
+    pass  # No need to change workspace when using combined resolution
 
 cap = cv2.VideoCapture(0)
 
@@ -138,8 +141,7 @@ def update_frame():
 
             x, y = apply_smoothing((x, y), last_hand_position, smoothing_factor)
 
-            ctypes.windll.user32.SetCursorPos(int(x * acceleration_factor),
-                                              int(y * acceleration_factor))
+            ctypes.windll.user32.SetCursorPos(int(x * acceleration_factor), int(y * acceleration_factor))
 
             last_move_time = time.time()
             last_hand_position = (x, y)
@@ -153,6 +155,8 @@ def update_frame():
     root.after(1, update_frame)
 
 last_move_time = time.time()
+
+keyboard.on_press_key("space", lambda _: change_workspace)
 
 root.protocol("WM_DELETE_WINDOW", on_close)
 root.after(1, update_frame)

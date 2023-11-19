@@ -2,6 +2,7 @@ import cv2
 import mediapipe as mp
 from screeninfo import get_monitors
 import time
+import keyboard
 import tkinter as tk
 from tkinter import Scale, Label, Button
 from PIL import Image, ImageTk
@@ -19,6 +20,7 @@ dead_zone_radius = 20
 default_smoothing_factor = 20
 default_dead_zone_radius = 20
 default_delay = 10
+default_dual_monitor_speed = 2.0  # Adjust the value as needed
 
 try:
     with open("settings.txt", "r") as file:
@@ -26,6 +28,7 @@ try:
         default_smoothing_factor = int(lines[0].strip()) if lines and len(lines) > 0 else default_smoothing_factor
         default_dead_zone_radius = int(lines[1].strip()) if lines and len(lines) > 1 else default_dead_zone_radius
         default_delay = int(lines[2].strip()) if lines and len(lines) > 2 else default_delay
+        default_dual_monitor_speed = float(lines[3].strip()) if lines and len(lines) > 3 else default_dual_monitor_speed
 except FileNotFoundError:
     pass
 
@@ -34,6 +37,7 @@ def save_settings():
         file.write(f"{smoothing_scale.get()}\n")
         file.write(f"{dead_zone_scale.get()}\n")
         file.write(f"{delay_scale.get()}\n")
+        file.write(f"{dual_monitor_speed_scale.get()}\n")
 
 def constrain_mouse_position(x, y):
     x = max(0, min(x, workspace_width - 1))
@@ -65,10 +69,19 @@ def update_delay(value):
     global delay
     delay = max(float(value) / 100.0, 0.01)
 
+def update_dual_monitor_speed(value):
+    current_value = dual_monitor_speed_scale.get()
+    dual_monitor_speed_label.config(text=f"Dual Monitor Speed: {current_value} (Default: {default_dual_monitor_speed})")
+    global dual_monitor_speed
+    dual_monitor_speed = float(value)
+
 def on_close():
     save_settings()
     cap.release()
     root.destroy()
+
+def change_workspace():
+    pass
 
 cap = cv2.VideoCapture(0)
 
@@ -96,6 +109,13 @@ delay_scale = Scale(root, from_=1, to=100, orient=tk.HORIZONTAL, label="",
 delay_scale.set(default_delay)
 delay_scale.pack(pady=5)
 
+dual_monitor_speed_label = Label(root, text=f"Dual Monitor Speed: {default_dual_monitor_speed}")
+dual_monitor_speed_label.pack(pady=5)
+dual_monitor_speed_scale = Scale(root, from_=1, to=10, orient=tk.HORIZONTAL, label="",
+                                command=update_dual_monitor_speed)
+dual_monitor_speed_scale.set(default_dual_monitor_speed)
+dual_monitor_speed_scale.pack(pady=5)
+
 save_button = Button(root, text="Save Settings", command=save_settings)
 save_button.pack(pady=10)
 
@@ -106,6 +126,7 @@ last_hand_position = None
 last_move_time = time.time()
 delay = default_delay
 smoothing_factor = default_smoothing_factor
+dual_monitor_speed = default_dual_monitor_speed
 
 def update_frame():
     global last_hand_position, last_move_time, delay
@@ -131,6 +152,12 @@ def update_frame():
 
             x, y = index_finger
 
+            # Apply dual monitor speed when near the edge of webcam vision
+            if x < dead_zone_radius or x > frame.shape[1] - dead_zone_radius:
+                x_speed = dual_monitor_speed
+            else:
+                x_speed = 1.0
+
             x, y = constrain_mouse_position(x, y)
 
             max_acceleration_factor = 3.0
@@ -138,7 +165,7 @@ def update_frame():
 
             x, y = apply_smoothing((x, y), last_hand_position, smoothing_factor)
 
-            ctypes.windll.user32.SetCursorPos(int(x * acceleration_factor),
+            ctypes.windll.user32.SetCursorPos(int(x * acceleration_factor * x_speed),
                                               int(y * acceleration_factor))
 
             last_move_time = time.time()
@@ -153,6 +180,8 @@ def update_frame():
     root.after(1, update_frame)
 
 last_move_time = time.time()
+
+keyboard.on_press_key("space", lambda _: change_workspace)
 
 root.protocol("WM_DELETE_WINDOW", on_close)
 root.after(1, update_frame)

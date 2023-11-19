@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import Scale, Label, Button
 from PIL import Image, ImageTk
 import ctypes
+import pyautogui
 
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands()
@@ -19,6 +20,7 @@ dead_zone_radius = 20
 default_smoothing_factor = 20
 default_dead_zone_radius = 20
 default_delay = 10
+default_click_delay = 2000
 
 try:
     with open("settings.txt", "r") as file:
@@ -26,6 +28,7 @@ try:
         default_smoothing_factor = int(lines[0].strip()) if lines and len(lines) > 0 else default_smoothing_factor
         default_dead_zone_radius = int(lines[1].strip()) if lines and len(lines) > 1 else default_dead_zone_radius
         default_delay = int(lines[2].strip()) if lines and len(lines) > 2 else default_delay
+        default_click_delay = int(lines[3].strip()) if lines and len(lines) > 3 else default_click_delay
 except FileNotFoundError:
     pass
 
@@ -34,6 +37,7 @@ def save_settings():
         file.write(f"{smoothing_scale.get()}\n")
         file.write(f"{dead_zone_scale.get()}\n")
         file.write(f"{delay_scale.get()}\n")
+        file.write(f"{click_delay_scale.get()}\n")
 
 def constrain_mouse_position(x, y):
     x = max(0, min(x, workspace_width - 1))
@@ -64,6 +68,12 @@ def update_delay(value):
     delay_label.config(text=f"Delay: {current_value} (Default: {default_delay})")
     global delay
     delay = max(float(value) / 100.0, 0.01)
+
+def update_click_delay(value):
+    current_value = click_delay_scale.get()
+    click_delay_label.config(text=f"Click Delay: {current_value} ms")
+    global click_delay
+    click_delay = int(value)
 
 def on_close():
     save_settings()
@@ -96,19 +106,71 @@ delay_scale = Scale(root, from_=1, to=100, orient=tk.HORIZONTAL, label="",
 delay_scale.set(default_delay)
 delay_scale.pack(pady=5)
 
+click_delay_label = Label(root, text=f"Click Delay: {default_click_delay} ms")
+click_delay_label.pack(pady=5)
+click_delay_scale = Scale(root, from_=1, to=5000, orient=tk.HORIZONTAL, label="",
+                          command=update_click_delay)
+click_delay_scale.set(default_click_delay)
+click_delay_scale.pack(pady=5)
+
 save_button = Button(root, text="Save Settings", command=save_settings)
 save_button.pack(pady=10)
 
 label = Label(root)
 label.pack()
 
-last_hand_position = None
-last_move_time = time.time()
+last_hand_positions = [None, None]
+last_move_times = [time.time(), time.time()]
+last_click_time = time.time()
 delay = default_delay
 smoothing_factor = default_smoothing_factor
+click_delay = default_click_delay
+
+# Introduce dead zone and stability check variables
+stable_position_count_threshold = 5
+stable_position_count = [0, 0]
+
+def perform_action(frame, hand_type, hand_landmarks):
+    # You can implement different actions based on hand_type and hand_landmarks
+    if hand_type == "Left":
+        # Perform actions with the left hand
+        index_finger = hand_landmarks.landmark[8]
+        middle_finger = hand_landmarks.landmark[12]
+        ring_finger = hand_landmarks.landmark[16]
+
+        # Check if the hand is fully opened or in a fist
+        if (
+            index_finger.y < hand_landmarks.landmark[7].y
+            and middle_finger.y < hand_landmarks.landmark[11].y
+            and ring_finger.y < hand_landmarks.landmark[15].y
+        ):
+            # Scroll up using pyautogui when the hand is fully opened
+            pyautogui.scroll(1)
+        elif (
+            index_finger.y > hand_landmarks.landmark[7].y
+            and middle_finger.y > hand_landmarks.landmark[11].y
+            and ring_finger.y > hand_landmarks.landmark[15].y
+        ):
+            # Scroll down using pyautogui when the hand is in a fist
+            pyautogui.scroll(-1)
+
+        # Draw circles around each finger in red
+        for landmark, color in zip([4, 8, 12, 16, 20], [(255, 0, 0)] * 5):
+            finger_point = (
+                int(hand_landmarks.landmark[landmark].x * frame.shape[1]),
+                int(hand_landmarks.landmark[landmark].y * frame.shape[0])
+            )
+            cv2.circle(frame, finger_point, 10, color, -1)
+
+    elif hand_type == "Right":
+        # Perform actions with the right hand (cursor movement and clicking)
+        index_finger = hand_landmarks.landmark[8]
+
+        # Draw a circle around the right index finger in blue
+        cv2.circle(frame, (int(index_finger.x * frame.shape[1]), int(index_finger.y * frame.shape[0])), 10, (0, 0, 255), -1)
 
 def update_frame():
-    global last_hand_position, last_move_time, delay
+    global last_hand_positions, last_move_times, delay, click_delay, last_click_time, stable_position_count
     ret, frame = cap.read()
 
     frame = cv2.flip(frame, 1)
@@ -117,32 +179,59 @@ def update_frame():
     results = hands.process(rgb_frame)
 
     if results.multi_hand_landmarks:
-        landmarks = results.multi_hand_landmarks[0].landmark
-        index_finger = (int(landmarks[8].x * frame.shape[1]), int(landmarks[8].y * frame.shape[0]))
+        for i, hand_landmarks in enumerate(results.multi_hand_landmarks):
+            hand_type = "Left" if i == 0 else "Right"
+            index_finger = (int(hand_landmarks.landmark[8].x * frame.shape[1]),
+                            int(hand_landmarks.landmark[8].y * frame.shape[0]))
 
-        cv2.circle(frame, index_finger, 10, (0, 255, 0), -1)
+            if hand_type == "Left":
+                color = (255, 0, 0)  # Red for left hand
+                perform_action(frame, hand_type, hand_landmarks)
+            else:
+                color = (0, 0, 255)  # Blue for right hand
 
-        if time.time() - last_move_time > delay:
-            hand_speed = ((index_finger[0] - last_hand_position[0]) ** 2 +
-                          (index_finger[1] - last_hand_position[1]) ** 2) ** 0.5 / delay if last_hand_position else 0
+            cv2.circle(frame, index_finger, 10, color, -1)
 
-            if hand_speed < dead_zone_radius:
-                hand_speed = 0
+            if i < len(last_move_times) and time.time() - last_move_times[i] > delay:
+                hand_speed = ((index_finger[0] - last_hand_positions[i][0]) ** 2 +
+                              (index_finger[1] - last_hand_positions[i][1]) ** 2) ** 0.5 / delay if last_hand_positions[i] else 0
 
-            x, y = index_finger
+                if hand_speed < dead_zone_radius:
+                    hand_speed = 0
 
-            x, y = constrain_mouse_position(x, y)
+                x, y = index_finger
 
-            max_acceleration_factor = 3.0
-            acceleration_factor = min(1 + 0.1 * hand_speed, max_acceleration_factor)
+                x, y = constrain_mouse_position(x, y)
 
-            x, y = apply_smoothing((x, y), last_hand_position, smoothing_factor)
+                max_acceleration_factor = 3.0
+                acceleration_factor = min(1 + 0.1 * hand_speed, max_acceleration_factor)
 
-            ctypes.windll.user32.SetCursorPos(int(x * acceleration_factor),
-                                              int(y * acceleration_factor))
+                # Introduce dead zone and stability check
+                if (
+                    last_hand_positions[i] is not None
+                    and abs(x - last_hand_positions[i][0]) < dead_zone_radius
+                    and abs(y - last_hand_positions[i][1]) < dead_zone_radius
+                ):
+                    stable_position_count[i] += 1
+                    if stable_position_count[i] < stable_position_count_threshold:
+                        continue
+                else:
+                    stable_position_count[i] = 0
 
-            last_move_time = time.time()
-            last_hand_position = (x, y)
+                x, y = apply_smoothing((x, y), last_hand_positions[i], smoothing_factor)
+
+                ctypes.windll.user32.SetCursorPos(int(x * acceleration_factor),
+                                                  int(y * acceleration_factor))
+
+                if hand_type == "Right":
+                    # If the index finger is up for the right hand, perform a click with delay
+                    if time.time() - last_click_time > click_delay / 1000:
+                        ctypes.windll.user32.mouse_event(2, 0, 0, 0, 0)  # Mouse left down
+                        ctypes.windll.user32.mouse_event(4, 0, 0, 0, 0)  # Mouse left up
+                        last_click_time = time.time()
+
+                last_move_times[i] = time.time()
+                last_hand_positions[i] = (x, y)
 
     img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     img = ImageTk.PhotoImage(image=img)
@@ -152,7 +241,7 @@ def update_frame():
 
     root.after(1, update_frame)
 
-last_move_time = time.time()
+last_click_time = time.time()
 
 root.protocol("WM_DELETE_WINDOW", on_close)
 root.after(1, update_frame)
